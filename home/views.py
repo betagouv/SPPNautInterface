@@ -1,13 +1,14 @@
 """
 Views for home module
 """
+import json
 import uuid
 from base64 import b64encode
 from http import HTTPStatus
 
 import requests
 from django.conf import settings
-from django.http import FileResponse, HttpResponse
+from django.http import FileResponse, HttpResponse, HttpResponseRedirect
 from django.shortcuts import render
 from django.urls import reverse
 from django.views.generic import FormView
@@ -15,7 +16,7 @@ from django.views.generic import FormView
 from home.forms import UploadFileForm
 
 
-class Index(FormView):
+class Tableau(FormView):
     form_class = UploadFileForm
     template_name = "index.html"
 
@@ -29,8 +30,11 @@ class Index(FormView):
         return _forward_http_file(response)
 
 
+tableau = Tableau.as_view()
 
-index = Index.as_view()
+
+def tableau_redirect(request):
+    return HttpResponseRedirect(reverse("home:tableau"))
 
 
 def publication_upload(request):
@@ -57,6 +61,38 @@ def publication_upload(request):
     )
 
 
+def publication_cellar(request):
+    # FIXME: Utiliser Formulaire Django
+
+    generation_id = uuid.uuid4()
+    upload_url = _generate_publication_url(generation_id, "upload_from_cellar")
+    launch_generation_url = _generate_publication_url(generation_id, "generate")
+
+    username, password = _get_basicauth_credentials()
+    auth_token = b64encode(bytes(f"{username}:{password}", encoding="utf8")).decode(
+        "utf8"
+    )
+
+    response = requests.get(
+        _generate_ouvrages_list_url(),
+        auth=(username, password),
+    )
+
+    ouvrages = json.loads(response.content)
+
+    return render(
+        request,
+        "publication_cellar.html",
+        {
+            "generation_id": generation_id,
+            "ouvrages": ouvrages,
+            "upload_url": upload_url,
+            "launch_generation_url": launch_generation_url,
+            "auth_token": auth_token,
+        },
+    )
+
+
 def publication_display(request, generation_id):
     publication_url = _generate_publication_url(generation_id, "")
     username, password = _get_basicauth_credentials()
@@ -68,7 +104,15 @@ def publication_display(request, generation_id):
     if response.status_code == HTTPStatus.OK:
         return _forward_http_file(response)
 
-    return HttpResponse("<meta http-equiv='refresh' content='10'>")
+    logs = ""
+    if response.status_code == HTTPStatus.NOT_FOUND:
+        logs = str(response.content, "utf-8")
+
+    return render(
+        request,
+        "generating_page.html",
+        {"logs": logs},
+    )
 
 
 def _forward_http_file(response):
@@ -85,3 +129,7 @@ def _get_basicauth_credentials():
 
 def _generate_publication_url(generation_id, suffix):
     return f"{settings.GENERATOR_SERVICE_HOST}/publication/{generation_id}/{suffix}"
+
+
+def _generate_ouvrages_list_url():
+    return f"{settings.GENERATOR_SERVICE_HOST}/publication/ouvrages/list"
